@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "build": "cd ../web && npm install && npm run build && cd ../server && tsc",
+    "build": "tsc",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
