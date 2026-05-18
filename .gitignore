@@ -3,3 +3,10 @@ data/cards/
 data/cards.md
 data/lexicon.json
 data/state.json
+data/language_coach.db
+
+node_modules/
+server/.env
+server/dist/
+server/drizzle/
+web/dist/

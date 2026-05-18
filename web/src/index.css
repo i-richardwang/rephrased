@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cream: #FFF8E7;
+  --color-ink: #1a1a1a;
+  --color-coral: #FF6B6B;
+  --color-teal: #2EC4B6;
+  --color-yellow: #FFD166;
+  --color-purple: #A78BFA;
+  --color-orange: #F97316;
+  --color-lime: #A3E635;
+  --color-pink: #F472B6;
+
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, monospace;
+
+  --shadow-brutal: 4px 4px 0px var(--color-ink);
+  --shadow-brutal-sm: 2px 2px 0px var(--color-ink);
+  --shadow-brutal-lg: 6px 6px 0px var(--color-ink);
+  --shadow-brutal-hover: 6px 6px 0px var(--color-ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-display);
+  background-color: var(--color-cream);
+  color: var(--color-ink);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: var(--color-yellow);
+  color: var(--color-ink);
+}
+
+@utility brutal-border {
+  border: 3px solid var(--color-ink);
+}
+
+@utility brutal-shadow {
+  box-shadow: var(--shadow-brutal);
+}
+
+@utility brutal-shadow-sm {
+  box-shadow: var(--shadow-brutal-sm);
+}
+
+@utility brutal-shadow-lg {
+  box-shadow: var(--shadow-brutal-lg);
+}
+
+@utility brutal-hover {
+  transition: transform 80ms ease, box-shadow 80ms ease;
+  &:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-brutal-hover);
+  }
+  &:active {
+    transform: translate(2px, 2px);
+    box-shadow: none;
+  }
+}
+
+@utility brutal-btn {
+  border: 3px solid var(--color-ink);
+  box-shadow: var(--shadow-brutal);
+  padding: 0.5rem 1.25rem;
+  font-weight: 700;
+  font-family: var(--font-display);
+  cursor: pointer;
+  transition: transform 80ms ease, box-shadow 80ms ease;
+  &:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-brutal-hover);
+  }
+  &:active {
+    transform: translate(2px, 2px);
+    box-shadow: none;
+  }
+}
+
+@utility card-paraphrase {
+  background-color: #FEE2E2;
+  border-color: var(--color-coral);
+}
+
+@utility card-wording {
+  background-color: #CCFBF1;
+  border-color: var(--color-teal);
+}
+
+@utility card-structure {
+  background-color: #FEF3C7;
+  border-color: var(--color-yellow);
+}
+
+@utility card-naming {
+  background-color: #EDE9FE;
+  border-color: var(--color-purple);
+}
