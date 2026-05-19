@@ -113,7 +113,7 @@ export default function Transcripts() {
         ))}
         {data.transcripts.length === 0 && (
           <div className="text-muted-foreground text-center py-12">
-            还没有 transcript。在本地运行 <code>python3 scripts/push.py</code> 上传。
+            还没有 transcript。在本地运行 <code>rp</code> 上传。
           </div>
         )}
       </div>

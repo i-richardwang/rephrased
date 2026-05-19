@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""
+rp — rephrased client. Scan local Claude Code sessions and upload
+transcripts to the rephrased server for analysis.
+
+Install:
+  curl -fsSL https://raw.githubusercontent.com/<user>/rephrased/master/cli/rp \\
+    -o ~/.local/bin/rp && chmod +x ~/.local/bin/rp
+
+First-run setup:
+  rp --init   # writes ~/.config/rp/config.json template
+
+Daily use:
+  rp                    # scan + push new/changed sessions
+  rp --since 7d         # only sessions touched in last 7 days
+  rp --force            # re-push everything
+  rp --dry-run          # preview without uploading
+  rp --status           # query server-side status
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+
+CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+CONFIG_PATH = CONFIG_HOME / "rp" / "config.json"
+STATE_PATH = STATE_HOME / "rp" / "state.json"
+
+CONFIG_TEMPLATE = {
+    "server": "https://your-rephrased.example.com",
+    "token": "paste-your-API_TOKEN-here",
+}
+
+SYSTEM_TAG_PATTERN = re.compile(
+    r"<(system-reminder|command-name|command-message|command-args|"
+    r"local-command-stdout|local-command-stderr|user-prompt-submit-hook|"
+    r"session-start-hook)>.*?</\1>",
+    re.DOTALL,
+)
+CAVEAT_PATTERN = re.compile(
+    r"Caveat: The messages below were generated.*?(?=\n\n|\Z)", re.DOTALL
+)
+DURATION_RE = re.compile(r"^(\d+)\s*([dhwm])$", re.IGNORECASE)
+
+
+# ---------- config & state ----------
+
+def load_config(path: Path) -> dict:
+    if not path.exists():
+        die(
+            f"config not found: {path}\n"
+            f"run `rp --init` to create a template, then edit `server` and `token`."
+        )
+    try:
+        cfg = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        die(f"config is not valid JSON ({path}): {e}")
+    for key in ("server", "token"):
+        if not cfg.get(key):
+            die(f"config missing `{key}`: {path}")
+    return cfg
+
+
+def init_config(path: Path) -> int:
+    if path.exists():
+        die(f"config already exists: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(CONFIG_TEMPLATE, indent=2) + "\n")
+    path.chmod(0o600)
+    print(f"created {path}")
+    print("edit `server` and `token`, then run `rp` to push.")
+    return 0
+
+
+def load_state(path: Path) -> dict[str, float]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_state(path: Path, state: dict[str, float]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.replace(path)
+
+
+# ---------- transcript extraction ----------
+
+def clean_user_text(text: str) -> str:
+    text = SYSTEM_TAG_PATTERN.sub("", text)
+    text = CAVEAT_PATTERN.sub("", text)
+    return text.strip()
+
+
+def extract_text(message: dict, role: str) -> str:
+    content = message.get("content")
+    if role == "user" and isinstance(content, str):
+        return clean_user_text(content)
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        joined = "\n".join(parts)
+        return clean_user_text(joined) if role == "user" else joined.strip()
+    return ""
+
+
+def parse_session(jsonl_path: Path) -> list[dict]:
+    messages: list[dict] = []
+    with jsonl_path.open() as f:
+        for i, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            role = obj.get("type")
+            if role not in ("user", "assistant"):
+                continue
+            text = extract_text(obj.get("message", {}), role)
+            if text:
+                messages.append({"role": role, "text": text, "line": i})
+    return messages
+
+
+def render_markdown(session_id: str, source_path: Path, messages: list[dict]) -> str:
+    lines = [
+        f"# Session {session_id}",
+        "",
+        f"- source: `{source_path}`",
+        f"- extracted_at: {datetime.now(timezone.utc).isoformat()}",
+        f"- message_count: {len(messages)}",
+        "",
+        "---",
+        "",
+    ]
+    for msg in messages:
+        label = "用户" if msg["role"] == "user" else "Claude"
+        lines.append(f"### {label} (L{msg['line']})")
+        lines.append("")
+        lines.append(msg["text"])
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ---------- since parsing ----------
+
+def parse_since(s: str) -> float:
+    m = DURATION_RE.match(s.strip())
+    if m:
+        n, unit = int(m.group(1)), m.group(2).lower()
+        mult = {"h": 3600, "d": 86400, "w": 86400 * 7, "m": 86400 * 30}[unit]
+        return (datetime.now(timezone.utc) - timedelta(seconds=n * mult)).timestamp()
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+    raise argparse.ArgumentTypeError(
+        f"--since not parseable: {s!r}  (try 7d / 24h / 2w / 2026-05-01)"
+    )
+
+
+# ---------- HTTP ----------
+
+def http_request(
+    method: str, url: str, token: str, body: dict | None = None, timeout: int = 30
+) -> tuple[int, Any]:
+    data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
+    headers = {"Authorization": f"Bearer {token}"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            payload = json.loads(e.read())
+        except Exception:
+            payload = {"error": "http error"}
+        return e.code, payload
+
+
+# ---------- core actions ----------
+
+def collect_sessions(since: float | None) -> list[Path]:
+    if not PROJECTS_ROOT.is_dir():
+        die(f"projects dir not found: {PROJECTS_ROOT}")
+    files = sorted(PROJECTS_ROOT.glob("*/*.jsonl"))
+    if since is not None:
+        files = [f for f in files if f.stat().st_mtime >= since]
+    return files
+
+
+def push_one(
+    jsonl_path: Path, *, server: str, token: str, dry_run: bool
+) -> tuple[str, str]:
+    """Returns (status_code, detail). status_code: pushed | unchanged | empty | error."""
+    sid = jsonl_path.stem
+    mtime = jsonl_path.stat().st_mtime
+    messages = parse_session(jsonl_path)
+
+    if not messages:
+        return "empty", "no messages"
+
+    content = render_markdown(sid, jsonl_path, messages)
+
+    if dry_run:
+        return "would-push", f"{len(messages)} msgs, {len(content)} chars"
+
+    code, body = http_request(
+        "POST",
+        f"{server.rstrip('/')}/api/transcripts",
+        token,
+        body={
+            "session_id": sid,
+            "source_path": str(jsonl_path),
+            "content": content,
+            "transcript_mtime": mtime,
+        },
+    )
+    if code == 200 and body.get("ok"):
+        if body.get("queued"):
+            return "pushed", f"{body.get('status')} (queued)"
+        return "unchanged", "server already had it"
+    return "error", f"HTTP {code}: {str(body)[:200]}"
+
+
+def cmd_push(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    state = load_state(args.state)
+
+    files = collect_sessions(args.since)
+    if not files:
+        print("no sessions to scan")
+        return 0
+
+    # Incremental filter
+    pending: list[Path] = []
+    for f in files:
+        sid = f.stem
+        if not args.force and state.get(sid) == f.stat().st_mtime:
+            continue
+        pending.append(f)
+
+    if not pending:
+        print(f"all {len(files)} sessions already up-to-date (use --force to re-push)")
+        return 0
+
+    label = "would push" if args.dry_run else "pushing"
+    print(f"{label} {len(pending)} / {len(files)} sessions → {cfg['server']}")
+
+    stats = {"pushed": 0, "unchanged": 0, "empty": 0, "error": 0, "would-push": 0}
+    for f in pending:
+        status, detail = push_one(
+            f, server=cfg["server"], token=cfg["token"], dry_run=args.dry_run
+        )
+        stats[status] = stats.get(status, 0) + 1
+        marker = {
+            "pushed": "✓",
+            "unchanged": "·",
+            "empty": "∅",
+            "would-push": "?",
+            "error": "✗",
+        }.get(status, "?")
+        print(f"  {marker} {f.stem[:8]}… {status:11s} {detail}")
+        if status in ("pushed", "unchanged", "empty") and not args.dry_run:
+            state[f.stem] = f.stat().st_mtime
+            save_state(args.state, state)
+
+    print()
+    summary = "  ".join(f"{k}={v}" for k, v in stats.items() if v)
+    print(summary)
+    return 0 if stats.get("error", 0) == 0 else 1
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    code, body = http_request(
+        "GET", f"{cfg['server'].rstrip('/')}/api/transcripts", cfg["token"]
+    )
+    if code != 200:
+        die(f"server returned HTTP {code}: {body}")
+    rows = body.get("transcripts", [])
+    queue = body.get("queue", {})
+
+    by_status: dict[str, int] = {}
+    for r in rows:
+        s = r.get("status", "?")
+        by_status[s] = by_status.get(s, 0) + 1
+
+    print(f"server: {cfg['server']}")
+    print(f"transcripts: {len(rows)} total")
+    for s, n in sorted(by_status.items()):
+        print(f"  {s:10s} {n}")
+    print(
+        f"queue: size={queue.get('size', 0)} "
+        f"pending={queue.get('pending', 0)} "
+        f"inflight={queue.get('inflight', 0)}"
+    )
+
+    failed = [r for r in rows if r.get("status") == "failed"]
+    if failed:
+        print(f"\nfailed sessions ({len(failed)}):")
+        for r in failed[:10]:
+            err = (r.get("error") or "")[:80]
+            print(f"  {r['sessionId'][:8]}…  {err}")
+        if len(failed) > 10:
+            print(f"  … and {len(failed) - 10} more")
+    return 0
+
+
+# ---------- entry ----------
+
+def die(msg: str) -> "None":
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="rp",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument(
+        "--init", action="store_true", help="write a config template and exit"
+    )
+    ap.add_argument(
+        "--status", action="store_true", help="show server-side transcripts summary"
+    )
+    ap.add_argument(
+        "--since",
+        type=parse_since,
+        metavar="DUR",
+        help="only sessions newer than (7d / 24h / 2w / 2026-05-01)",
+    )
+    ap.add_argument("--force", action="store_true", help="re-push even if mtime unchanged")
+    ap.add_argument("--dry-run", action="store_true", help="preview, no uploads")
+    ap.add_argument(
+        "--config",
+        type=Path,
+        default=CONFIG_PATH,
+        help=f"config path (default: {CONFIG_PATH})",
+    )
+    ap.add_argument(
+        "--state",
+        type=Path,
+        default=STATE_PATH,
+        help=f"state path (default: {STATE_PATH})",
+    )
+    args = ap.parse_args()
+
+    if args.init:
+        return init_config(args.config)
+    if args.status:
+        return cmd_status(args)
+    return cmd_push(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

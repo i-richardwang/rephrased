@@ -1,6 +1,6 @@
-# language-coach
+# rephrased
 
-从 Claude Code 本地 transcripts 中提取语言学习素材。
+捕捉 AI 把你的话用更精准的方式重新表达的瞬间，做成可复习的卡片。
 
 ## 思路
 
@@ -9,12 +9,10 @@
 ## 架构
 
 ```
-[本地 Mac]                                    [server (e.g. Zeabur)]
+[本地 Mac (× N 台)]                            [server (e.g. Zeabur)]
 ~/.claude/projects/*.jsonl
-    │ scripts/extract.py
-    ▼
-data/transcripts-extracted/*.md
-    │ scripts/push.py (POST /api/transcripts, Bearer auth)
+    │ rp  (单文件 Python，零依赖)
+    │     POST /api/transcripts, Bearer auth
     └────────────────────────────────────────► transcripts 表 (status=pending)
                                                       │
                                                       ▼
@@ -30,20 +28,26 @@ data/transcripts-extracted/*.md
 
 ## 用法
 
-### 本地
+### 本地（每台 Mac 一次）
 
 ```bash
-# 1. 提取(扫 Claude 本地 transcripts)
-python3 scripts/extract.py ~/.claude/projects/<proj>/
-python3 scripts/extract.py --all --since 7d
+# 1. 安装 CLI（单文件，零依赖）
+curl -fsSL https://raw.githubusercontent.com/<user>/rephrased/master/cli/rp \
+  -o ~/.local/bin/rp && chmod +x ~/.local/bin/rp
 
-# 2. 推送到 server
-export LANGUAGE_COACH_URL=https://your-server.example.com
-export LANGUAGE_COACH_TOKEN=<bearer token>
-python3 scripts/push.py
-python3 scripts/push.py --only <sessionId>
-python3 scripts/push.py --force
+# 2. 写配置
+rp --init                                       # 生成 ~/.config/rp/config.json 模板
+# 编辑该文件，填入 server URL 和 API_TOKEN
+
+# 3. 日常使用
+rp                # 增量扫描 ~/.claude/projects/ 并上传
+rp --since 7d     # 只看近 7 天
+rp --dry-run      # 预览
+rp --force        # 全量重推
+rp --status       # 查 server 上的处理状态
 ```
+
+状态分离：`~/.config/rp/config.json`（多设备共享）+ `~/.local/state/rp/state.json`（每台机独立的增量游标）。
 
 ### Server 部署
 
@@ -52,7 +56,7 @@ python3 scripts/push.py --force
 | 变量 | 用途 |
 |---|---|
 | `DATABASE_URL` | PostgreSQL 连接串 |
-| `API_TOKEN` | push.py 用的 bearer token |
+| `API_TOKEN` | `rp` 上传用的 bearer token |
 | `LLM_BASE_URL` | OpenAI 兼容 endpoint，如 `https://api.xxx.com/v1` |
 | `LLM_API_KEY` | 对应的 key |
 | `LLM_MODEL_ID` | 模型 id |
@@ -77,11 +81,10 @@ DATABASE_URL=... npx tsx migrations/run.ts 002_transcripts.sql
 
 ## 目录
 
-- `scripts/` — 本地提取/推送脚本
+- `cli/rp` — 本地端单文件 CLI（Python stdlib only）
 - `server/` — Hono + Drizzle + PostgreSQL，含分析 worker 和 LLM 调用
 - `server/prompts/analyze.md` — 分析提示词
 - `web/` — React 前端
-- `data/` — 本地运行产出（gitignore，不入库）
 
 ## 卡片字段
 

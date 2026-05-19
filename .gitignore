@@ -1,11 +1,3 @@
-data/transcripts-extracted/
-data/cards/
-data/cards.md
-data/lexicon.json
-data/state.json
-data/push_state.json
-data/language_coach.db
-
 node_modules/
 server/.env
 server/dist/
@@ -13,3 +5,7 @@ server/drizzle/
 web/dist/
 web/tsconfig.tsbuildinfo
 .claude/
+
+# legacy local outputs from earlier iteration; safe to delete manually
+data/
+
