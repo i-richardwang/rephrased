@@ -3,6 +3,7 @@ data/cards/
 data/cards.md
 data/lexicon.json
 data/state.json
+data/push_state.json
 data/language_coach.db
 
 node_modules/

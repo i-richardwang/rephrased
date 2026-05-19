@@ -62,6 +62,23 @@ export interface Lexicon {
   cardTotal: number;
 }
 
+export interface TranscriptRow {
+  sessionId: string;
+  sourcePath: string;
+  transcriptMtime: number;
+  status: "pending" | "analyzing" | "done" | "failed";
+  analyzedMtime: number | null;
+  error: string | null;
+  model: string;
+  uploadedAt: string;
+  analyzedAt: string | null;
+}
+
+export interface TranscriptList {
+  transcripts: TranscriptRow[];
+  queue: { size: number; pending: number; inflight: number };
+}
+
 export const api = {
   cards: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
@@ -76,4 +93,5 @@ export const api = {
     postJSON(`/api/cards/${cardId}/favorite`, { value }),
   hide: (cardId: number, value: boolean) =>
     postJSON(`/api/cards/${cardId}/hide`, { value }),
+  transcripts: () => fetchJSON<TranscriptList>("/api/transcripts"),
 };

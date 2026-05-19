@@ -10,13 +10,17 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 
-export const sessions = pgTable("sessions", {
-  id: text("id").primaryKey(),
-  sourcePath: text("source_path").default(""),
-  processedAt: text("processed_at").default(""),
+export const transcripts = pgTable("transcripts", {
+  sessionId: text("session_id").primaryKey(),
+  sourcePath: text("source_path").notNull().default(""),
+  content: text("content").notNull(),
+  transcriptMtime: doublePrecision("transcript_mtime").notNull().default(0),
+  status: text("status").notNull().default("pending"),
+  analyzedMtime: doublePrecision("analyzed_mtime"),
+  error: text("error"),
   model: text("model").default(""),
-  cardCount: integer("card_count").default(0),
-  transcriptMtime: doublePrecision("transcript_mtime").default(0),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+  analyzedAt: timestamp("analyzed_at", { withTimezone: true }),
 });
 
 export const cards = pgTable(
@@ -25,7 +29,7 @@ export const cards = pgTable(
     id: serial("id").primaryKey(),
     sessionId: text("session_id")
       .notNull()
-      .references(() => sessions.id, { onDelete: "cascade" }),
+      .references(() => transcripts.sessionId, { onDelete: "cascade" }),
     cardIndex: integer("card_index").notNull(),
     type: text("type").notNull(),
     userSaid: text("user_said").notNull(),

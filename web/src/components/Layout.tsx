@@ -5,6 +5,7 @@ const links = [
   { to: "/", label: "Daily" },
   { to: "/browse", label: "Browse" },
   { to: "/lexicon", label: "Vocab" },
+  { to: "/transcripts", label: "Sessions" },
 ];
 
 export default function Layout() {
