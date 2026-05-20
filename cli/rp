@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -180,6 +181,20 @@ def parse_since(s: str) -> float:
     )
 
 
+def parse_cold(s: str) -> float:
+    s = s.strip()
+    if s == "0":
+        return 0.0
+    m = DURATION_RE.match(s)
+    if m:
+        n, unit = int(m.group(1)), m.group(2).lower()
+        mult = {"h": 3600, "d": 86400, "w": 86400 * 7, "m": 86400 * 30}[unit]
+        return float(n * mult)
+    raise argparse.ArgumentTypeError(
+        f"--cold not parseable: {s!r}  (try 4h / 1d / 0)"
+    )
+
+
 # ---------- HTTP ----------
 
 def http_request(
@@ -203,12 +218,15 @@ def http_request(
 
 # ---------- core actions ----------
 
-def collect_sessions(since: float | None) -> list[Path]:
+def collect_sessions(since: float | None, cold: float | None) -> list[Path]:
     if not PROJECTS_ROOT.is_dir():
         die(f"projects dir not found: {PROJECTS_ROOT}")
     files = sorted(PROJECTS_ROOT.glob("*/*.jsonl"))
     if since is not None:
         files = [f for f in files if f.stat().st_mtime >= since]
+    if cold is not None and cold > 0:
+        cutoff = time.time() - cold
+        files = [f for f in files if f.stat().st_mtime <= cutoff]
     return files
 
 
@@ -250,7 +268,12 @@ def cmd_push(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     state = load_state(args.state)
 
-    files = collect_sessions(args.since)
+    cold_seconds: float | None = args.cold
+    if args.force:
+        cold_seconds = 0.0
+    elif cold_seconds is None:
+        cold_seconds = 3 * 86400  # default: 3 days
+    files = collect_sessions(args.since, cold_seconds)
     if not files:
         print("no sessions to scan")
         return 0
@@ -354,6 +377,13 @@ def main() -> int:
         type=parse_since,
         metavar="DUR",
         help="only sessions newer than (7d / 24h / 2w / 2026-05-01)",
+    )
+    ap.add_argument(
+        "--cold",
+        type=parse_cold,
+        default=None,
+        metavar="DUR",
+        help="only upload sessions idle for this long (default: 3d, use 0 to disable)",
     )
     ap.add_argument("--force", action="store_true", help="re-push even if mtime unchanged")
     ap.add_argument("--dry-run", action="store_true", help="preview, no uploads")

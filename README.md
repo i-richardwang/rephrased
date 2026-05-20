@@ -40,10 +40,12 @@ rp --init                  # generates ~/.config/rp/config.json template
 # Edit the file — fill in your server URL and API_TOKEN
 
 # 3. Daily use
-rp                         # incremental scan & upload
+rp                         # incremental scan & upload (waits 3d after last activity)
+rp --cold 1h               # only upload sessions idle for 1+ hour
+rp --cold 0                # no cooldown — upload everything including active sessions
 rp --since 7d              # only sessions from last 7 days
 rp --dry-run               # preview without uploading
-rp --force                 # re-push everything
+rp --force                 # re-push everything (also disables cooldown)
 rp --status                # check server-side processing status
 ```
 

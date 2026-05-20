@@ -49,11 +49,14 @@ app.get("/", async (c) => {
     conditions.push(eq(cardStates.favorite, true));
   } else if (view === "hidden") {
     conditions.push(eq(cardStates.hidden, true));
+  } else if (view === "stale") {
+    conditions.push(eq(cards.stale, true));
   } else {
-    // all: exclude hidden
+    // all: exclude hidden and stale
     conditions.push(
       or(eq(cardStates.hidden, false), sql`${cardStates.hidden} IS NULL`),
     );
+    conditions.push(eq(cards.stale, false));
   }
 
   const rows = await db
@@ -76,7 +79,10 @@ app.get("/daily", async (c) => {
     .from(cards)
     .leftJoin(cardStates, eq(cardStates.cardId, cards.id))
     .where(
-      or(eq(cardStates.hidden, false), sql`${cardStates.hidden} IS NULL`),
+      and(
+        or(eq(cardStates.hidden, false), sql`${cardStates.hidden} IS NULL`),
+        eq(cards.stale, false),
+      ),
     )
     .orderBy(sql`${cardStates.lastViewedAt} ASC NULLS FIRST, random()`)
     .limit(limit);
@@ -103,15 +109,19 @@ app.get("/daily", async (c) => {
 });
 
 app.get("/stats", async (c) => {
+  const notStale = eq(cards.stale, false);
+
   const [totalRow] = await db
     .select({ count: sql<number>`count(*)::int` })
-    .from(cards);
+    .from(cards)
+    .where(notStale);
 
   const [sessionRow] = await db
     .select({
       count: sql<number>`count(distinct ${cards.sessionId})::int`,
     })
-    .from(cards);
+    .from(cards)
+    .where(notStale);
 
   const typeRows = await db
     .select({
@@ -119,6 +129,7 @@ app.get("/stats", async (c) => {
       count: sql<number>`count(*)::int`,
     })
     .from(cards)
+    .where(notStale)
     .groupBy(cards.type);
 
   const [favRow] = await db
@@ -144,6 +155,7 @@ app.get("/types", async (c) => {
   const rows = await db
     .selectDistinct({ type: cards.type })
     .from(cards)
+    .where(eq(cards.stale, false))
     .orderBy(cards.type);
   return c.json(rows.map((r) => r.type));
 });

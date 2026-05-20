@@ -12,12 +12,13 @@ import {
 } from "@/components/ui/select";
 import { Star, EyeOff } from "lucide-react";
 
-type View = "all" | "favorites" | "hidden";
+type View = "all" | "favorites" | "hidden" | "stale";
 
 const VIEWS: { key: View; label: string }[] = [
   { key: "all", label: "All" },
   { key: "favorites", label: "Favorites" },
   { key: "hidden", label: "Hidden" },
+  { key: "stale", label: "Stale" },
 ];
 
 export default function CardBrowser() {

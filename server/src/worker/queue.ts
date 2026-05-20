@@ -1,5 +1,5 @@
 import PQueue from "p-queue";
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, and, inArray, notInArray, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { cards, transcripts } from "../db/schema.js";
 import { analyzeTranscript } from "../services/analyze.js";
@@ -54,12 +54,33 @@ async function runAnalyze(sessionId: string): Promise<void> {
   }
 
   const nowIso = new Date().toISOString();
-  await db.transaction(async (tx) => {
-    await tx.delete(cards).where(eq(cards.sessionId, sessionId));
+  const newHashes = result.cards.map((c) => c.content_hash);
 
-    if (result.cards.length > 0) {
-      await tx.insert(cards).values(
-        result.cards.map((card, i) => ({
+  await db.transaction(async (tx) => {
+    // Mark old cards not in new results as stale (soft-delete)
+    if (newHashes.length > 0) {
+      await tx
+        .update(cards)
+        .set({ stale: true })
+        .where(
+          and(
+            eq(cards.sessionId, sessionId),
+            notInArray(cards.contentHash, newHashes),
+          ),
+        );
+    } else {
+      await tx
+        .update(cards)
+        .set({ stale: true })
+        .where(eq(cards.sessionId, sessionId));
+    }
+
+    // Upsert each new card: matched by content_hash → update fields; new → insert
+    for (let i = 0; i < result.cards.length; i++) {
+      const card = result.cards[i];
+      await tx
+        .insert(cards)
+        .values({
           sessionId,
           cardIndex: i + 1,
           type: card.type,
@@ -70,9 +91,23 @@ async function runAnalyze(sessionId: string): Promise<void> {
           contextHint: card.context_hint,
           userLine: card.source_ref.user_line,
           aiLine: card.source_ref.ai_line,
+          contentHash: card.content_hash,
+          stale: false,
           createdAt: nowIso,
-        })),
-      );
+        })
+        .onConflictDoUpdate({
+          target: [cards.sessionId, cards.contentHash],
+          set: {
+            cardIndex: i + 1,
+            type: card.type,
+            vocab: card.takeaway.vocab,
+            pattern: card.takeaway.pattern,
+            contextHint: card.context_hint,
+            userLine: card.source_ref.user_line,
+            aiLine: card.source_ref.ai_line,
+            stale: false,
+          },
+        });
     }
 
     await tx

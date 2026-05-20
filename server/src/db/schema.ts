@@ -39,9 +39,11 @@ export const cards = pgTable(
     contextHint: text("context_hint").default(""),
     userLine: integer("user_line"),
     aiLine: integer("ai_line"),
+    contentHash: text("content_hash").notNull(),
+    stale: boolean("stale").notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
-  (t) => [unique().on(t.sessionId, t.cardIndex)],
+  (t) => [unique().on(t.sessionId, t.contentHash)],
 );
 
 export const cardStates = pgTable("card_states", {

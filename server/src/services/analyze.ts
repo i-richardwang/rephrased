@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,9 +35,20 @@ const CardsSchema = z.object({
 
 export type ExtractedCard = z.infer<typeof CardSchema>;
 
+export interface AnalyzedCard extends ExtractedCard {
+  content_hash: string;
+}
+
 export interface AnalyzeResult {
-  cards: ExtractedCard[];
+  cards: AnalyzedCard[];
   model: string;
+}
+
+export function contentHash(userSaid: string, aiPhrased: string): string {
+  return createHash("md5")
+    .update(userSaid + "||" + aiPhrased)
+    .digest("hex")
+    .slice(0, 16);
 }
 
 export async function analyzeTranscript(
@@ -48,5 +60,9 @@ export async function analyzeTranscript(
     system: SYSTEM_PROMPT,
     prompt: transcript,
   });
-  return { cards: object.cards, model: modelLabel };
+  const cardsWithHash: AnalyzedCard[] = object.cards.map((card) => ({
+    ...card,
+    content_hash: contentHash(card.user_said, card.ai_phrased),
+  }));
+  return { cards: cardsWithHash, model: modelLabel };
 }
