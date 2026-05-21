@@ -100,16 +100,22 @@ app.get("/:sid", async (c) => {
   return c.json(row);
 });
 
+// Full re-analysis: drop all existing cards and re-analyze from scratch.
+// This is the only destructive path — it discards user curation (favorites,
+// view history) and must be triggered explicitly.
 app.post("/:sid/analyze", requireBearer, async (c) => {
   const sid = c.req.param("sid");
   const row = await db.query.transcripts.findFirst({
     where: eq(transcripts.sessionId, sid),
   });
   if (!row) return c.json({ error: "not found" }, 404);
-  await db
-    .update(transcripts)
-    .set({ status: "pending", error: null })
-    .where(eq(transcripts.sessionId, sid));
+  await db.transaction(async (tx) => {
+    await tx.delete(cards).where(eq(cards.sessionId, sid));
+    await tx
+      .update(transcripts)
+      .set({ status: "pending", analyzedThroughLine: 0, error: null })
+      .where(eq(transcripts.sessionId, sid));
+  });
   enqueueAnalyze(sid);
   return c.json({ ok: true, status: "pending" });
 });

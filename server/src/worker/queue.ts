@@ -1,8 +1,8 @@
 import PQueue from "p-queue";
-import { eq, and, inArray, notInArray, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { cards, transcripts } from "../db/schema.js";
-import { analyzeTranscript } from "../services/analyze.js";
+import { analyzeTranscript, maxTranscriptLine } from "../services/analyze.js";
 
 const CONCURRENCY = Number(process.env.LLM_CONCURRENCY) || 2;
 
@@ -26,10 +26,28 @@ async function runAnalyze(sessionId: string): Promise<void> {
     console.warn(`[queue] transcript ${sessionId} missing, skipping`);
     return;
   }
-  if (
-    row.status === "done" &&
-    row.analyzedMtime === row.transcriptMtime
-  ) {
+  if (row.status === "done" && row.analyzedMtime === row.transcriptMtime) {
+    return;
+  }
+
+  const through = row.analyzedThroughLine;
+  const maxLine = maxTranscriptLine(row.content);
+
+  // No new content beyond the analyzed cursor (defensive — should not happen
+  // for append-only sessions). Mark done without an LLM call.
+  if (maxLine <= through) {
+    await db
+      .update(transcripts)
+      .set({
+        status: "done",
+        analyzedMtime: row.transcriptMtime,
+        analyzedAt: sql`now()`,
+        error: null,
+      })
+      .where(eq(transcripts.sessionId, sessionId));
+    console.log(
+      `[queue] ${sessionId} no new lines (through L${through}), skipped`,
+    );
     return;
   }
 
@@ -38,11 +56,18 @@ async function runAnalyze(sessionId: string): Promise<void> {
     .set({ status: "analyzing", error: null })
     .where(eq(transcripts.sessionId, sessionId));
 
-  console.log(`[queue] analyzing ${sessionId} (${row.content.length} chars)`);
+  const isIncremental = through > 0;
+  console.log(
+    `[queue] analyzing ${sessionId} (${row.content.length} chars, ` +
+      `${isIncremental ? `incremental after L${through}` : "full"})`,
+  );
 
   let result;
   try {
-    result = await analyzeTranscript(row.content);
+    result = await analyzeTranscript(
+      row.content,
+      isIncremental ? { extractAfterLine: through } : {},
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[queue] failed ${sessionId}: ${message}`);
@@ -53,36 +78,38 @@ async function runAnalyze(sessionId: string): Promise<void> {
     return;
   }
 
+  // Server-side guard: drop cards anchored at or before the analyzed cursor.
+  // Cards with a null user_line can't be checked here — the
+  // (session_id, content_hash) unique constraint is the dedup net for those.
+  let newCards = result.cards;
+  if (isIncremental) {
+    newCards = newCards.filter(
+      (c) =>
+        c.source_ref.user_line == null || c.source_ref.user_line > through,
+    );
+  }
+
   const nowIso = new Date().toISOString();
-  const newHashes = result.cards.map((c) => c.content_hash);
 
   await db.transaction(async (tx) => {
-    // Mark old cards not in new results as stale (soft-delete)
-    if (newHashes.length > 0) {
-      await tx
-        .update(cards)
-        .set({ stale: true })
-        .where(
-          and(
-            eq(cards.sessionId, sessionId),
-            notInArray(cards.contentHash, newHashes),
-          ),
-        );
-    } else {
-      await tx
-        .update(cards)
-        .set({ stale: true })
+    let baseIndex = 0;
+    if (isIncremental) {
+      const [maxRow] = await tx
+        .select({
+          max: sql<number>`COALESCE(max(${cards.cardIndex}), 0)::int`,
+        })
+        .from(cards)
         .where(eq(cards.sessionId, sessionId));
+      baseIndex = maxRow?.max ?? 0;
     }
 
-    // Upsert each new card: matched by content_hash → update fields; new → insert
-    for (let i = 0; i < result.cards.length; i++) {
-      const card = result.cards[i];
+    for (let i = 0; i < newCards.length; i++) {
+      const card = newCards[i];
       await tx
         .insert(cards)
         .values({
           sessionId,
-          cardIndex: i + 1,
+          cardIndex: baseIndex + i + 1,
           type: card.type,
           userSaid: card.user_said,
           aiPhrased: card.ai_phrased,
@@ -92,21 +119,10 @@ async function runAnalyze(sessionId: string): Promise<void> {
           userLine: card.source_ref.user_line,
           aiLine: card.source_ref.ai_line,
           contentHash: card.content_hash,
-          stale: false,
           createdAt: nowIso,
         })
-        .onConflictDoUpdate({
+        .onConflictDoNothing({
           target: [cards.sessionId, cards.contentHash],
-          set: {
-            cardIndex: i + 1,
-            type: card.type,
-            vocab: card.takeaway.vocab,
-            pattern: card.takeaway.pattern,
-            contextHint: card.context_hint,
-            userLine: card.source_ref.user_line,
-            aiLine: card.source_ref.ai_line,
-            stale: false,
-          },
         });
     }
 
@@ -115,6 +131,7 @@ async function runAnalyze(sessionId: string): Promise<void> {
       .set({
         status: "done",
         analyzedMtime: row.transcriptMtime,
+        analyzedThroughLine: maxLine,
         analyzedAt: sql`now()`,
         model: result.model,
         error: null,
@@ -122,7 +139,9 @@ async function runAnalyze(sessionId: string): Promise<void> {
       .where(eq(transcripts.sessionId, sessionId));
   });
 
-  console.log(`[queue] done ${sessionId} → ${result.cards.length} cards`);
+  console.log(
+    `[queue] done ${sessionId} → +${newCards.length} cards (through L${maxLine})`,
+  );
 }
 
 export async function recoverPending(): Promise<void> {

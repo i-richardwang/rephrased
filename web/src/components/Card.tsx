@@ -1,6 +1,8 @@
+import { useState } from "react";
 import type { Card as CardType } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import TranscriptModal from "@/components/TranscriptModal";
 import {
   RefreshCw,
   Crosshair,
@@ -9,6 +11,7 @@ import {
   FileText,
   Star,
   EyeOff,
+  MessageSquare,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -41,12 +44,15 @@ interface CardProps {
 }
 
 export default function Card({ card, onFavorite, onHide, compact }: CardProps) {
+  const [showSource, setShowSource] = useState(false);
   const style = TYPE_STYLES[card.type] || "";
   const accent = TYPE_ACCENT[card.type] || "border-ink/20";
-  const showActions = onFavorite || onHide;
+  const hasSource = card.userLine != null || card.aiLine != null;
+  const showActions = Boolean(onFavorite || onHide || hasSource);
   const Icon = TYPE_ICON[card.type] || FileText;
 
   return (
+    <>
     <article
       className={`content-card ${style} ${compact ? "p-4" : "p-5"}`}
     >
@@ -132,6 +138,16 @@ export default function Card({ card, onFavorite, onHide, compact }: CardProps) {
               {card.hidden ? "Hidden" : "Hide"}
             </Button>
           )}
+          {hasSource && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowSource(true)}
+            >
+              <MessageSquare size={14} />
+              Source
+            </Button>
+          )}
           {card.viewCount > 0 && (
             <span className="ml-auto text-[10px] font-mono text-muted-foreground">
               viewed {card.viewCount}×
@@ -140,5 +156,14 @@ export default function Card({ card, onFavorite, onHide, compact }: CardProps) {
         </div>
       )}
     </article>
+    {showSource && (
+      <TranscriptModal
+        sessionId={card.sessionId}
+        userLine={card.userLine}
+        aiLine={card.aiLine}
+        onClose={() => setShowSource(false)}
+      />
+    )}
+    </>
   );
 }

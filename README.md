@@ -74,8 +74,10 @@ DATABASE_URL=... npx tsx migrations/run.ts 002_transcripts.sql
 
 ## Design decisions
 
-- **Granularity**: one session = one analysis pass; the model sees the full conversation before picking cards
-- **Incremental**: if a transcript's `transcript_mtime` hasn't changed, re-analysis is skipped
+- **Granularity**: the model always sees the full conversation as context before picking cards
+- **Cold gate**: Claude Code sessions are append-only and may span days. `rp` waits until a session has been idle for 3 days (`--cold`, configurable) before uploading, so most sessions are analyzed exactly once.
+- **Incremental analysis**: when an already-analyzed session grows, only the new messages are scanned for new cards — existing cards (and your favorites / view history) are never touched. The server tracks an `analyzed_through_line` cursor per session.
+- **Full re-analysis** is explicit-only (`POST /api/transcripts/:sid/analyze`) and is the only path that discards existing cards.
 - **Selection criteria**: was this idea already in the user's head before the AI spoke? Yes → record. No → skip.
 - **Common types**: Paraphrase / Precise Wording / Structured Expression / Concept Naming (not exhaustive)
 - **Zero cards is fine**: most sessions have no learning value — no forced output

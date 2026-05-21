@@ -51,13 +51,43 @@ export function contentHash(userSaid: string, aiPhrased: string): string {
     .slice(0, 16);
 }
 
+// Highest (L<n>) line marker in a rendered transcript; 0 if none found.
+// Anchored to the `### <role> (L<n>)` header so a literal "(L<n>)" inside a
+// message body cannot inflate the cursor.
+export function maxTranscriptLine(transcript: string): number {
+  let max = 0;
+  for (const m of transcript.matchAll(/^### .*\(L(\d+)\)\s*$/gm)) {
+    const n = Number(m[1]);
+    if (n > max) max = n;
+  }
+  return max;
+}
+
+function incrementalInstruction(afterLine: number): string {
+  return `
+
+## Incremental mode
+
+This transcript was partially analyzed before. ONLY create cards whose source exchange occurs after line L${afterLine}. Messages at or before L${afterLine} are provided as context to help you judge expression upgrades — do NOT create cards from them. Every card's \`source_ref.user_line\` must be greater than ${afterLine}.`;
+}
+
+export interface AnalyzeOptions {
+  extractAfterLine?: number;
+}
+
 export async function analyzeTranscript(
   transcript: string,
+  opts: AnalyzeOptions = {},
 ): Promise<AnalyzeResult> {
+  const system =
+    opts.extractAfterLine && opts.extractAfterLine > 0
+      ? SYSTEM_PROMPT + incrementalInstruction(opts.extractAfterLine)
+      : SYSTEM_PROMPT;
+
   const { object } = await generateObject({
     model,
     schema: CardsSchema,
-    system: SYSTEM_PROMPT,
+    system,
     prompt: transcript,
   });
   const cardsWithHash: AnalyzedCard[] = object.cards.map((card) => ({

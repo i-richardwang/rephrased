@@ -79,6 +79,11 @@ export interface TranscriptList {
   queue: { size: number; pending: number; inflight: number };
 }
 
+export interface TranscriptDetail extends TranscriptRow {
+  content: string;
+  analyzedThroughLine: number;
+}
+
 export const api = {
   cards: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
@@ -94,4 +99,6 @@ export const api = {
   hide: (cardId: number, value: boolean) =>
     postJSON(`/api/cards/${cardId}/hide`, { value }),
   transcripts: () => fetchJSON<TranscriptList>("/api/transcripts"),
+  transcript: (sessionId: string) =>
+    fetchJSON<TranscriptDetail>(`/api/transcripts/${sessionId}`),
 };
